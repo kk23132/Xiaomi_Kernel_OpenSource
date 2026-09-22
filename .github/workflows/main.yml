@@ -23,6 +23,8 @@ jobs:
       # ============================================================
       - name: Install dependencies
         run: |
+          set -eux
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -41,9 +43,13 @@ jobs:
 
       # ============================================================
       # 3. Download AOSP Clang r365631c
+      #
+      # r365631c is a directory, not a branch.
       # ============================================================
       - name: Download AOSP Clang 9
         run: |
+          set -eux
+
           git clone \
             --depth=1 \
             -b android11-qpr3-release \
@@ -63,6 +69,8 @@ jobs:
       # ============================================================
       - name: Download AOSP GCC 4.9 AArch64
         run: |
+          set -eux
+
           git clone \
             --depth=1 \
             -b android10-release \
@@ -74,6 +82,8 @@ jobs:
       # ============================================================
       - name: Download AOSP GCC 4.9 ARM32
         run: |
+          set -eux
+
           git clone \
             --depth=1 \
             -b android10-release \
@@ -85,6 +95,8 @@ jobs:
       # ============================================================
       - name: Verify toolchains
         run: |
+          set -eux
+
           echo "=================================================="
           echo "Clang"
           echo "=================================================="
@@ -137,6 +149,8 @@ jobs:
       # ============================================================
       - name: Show source configuration
         run: |
+          set -eux
+
           echo "=================================================="
           echo "Git branch"
           echo "=================================================="
@@ -175,6 +189,7 @@ jobs:
           ARCH: arm64
           SUBARCH: arm64
         run: |
+          set -euxo pipefail
 
           # --------------------------------------------------------
           # Toolchains
@@ -203,7 +218,7 @@ jobs:
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
           # --------------------------------------------------------
-          # Print configuration
+          # Print build environment
           # --------------------------------------------------------
 
           echo "=================================================="
@@ -229,7 +244,7 @@ jobs:
           "$CLANG" --version
 
           # --------------------------------------------------------
-          # Test compiler
+          # Test compiler support for stack protector
           # --------------------------------------------------------
 
           echo
@@ -254,6 +269,19 @@ jobs:
           echo "SUCCESS: Clang accepts -fstack-protector-strong"
 
           # --------------------------------------------------------
+          # Prepare clean output directory
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Clean output directory"
+          echo "=================================================="
+
+          rm -rf out
+
+          mkdir -p out
+
+          # --------------------------------------------------------
           # Configure kernel
           # --------------------------------------------------------
 
@@ -261,8 +289,6 @@ jobs:
           echo "=================================================="
           echo "Configure kernel"
           echo "=================================================="
-
-          rm -rf out
 
           make O=out \
             ARCH=arm64 \
@@ -273,21 +299,84 @@ jobs:
             dipper_user_defconfig
 
           # --------------------------------------------------------
-          # Check generated configuration
+          # Verify generated configuration
           # --------------------------------------------------------
 
           echo
           echo "=================================================="
-          echo "Stack protector configuration"
+          echo "Original stack protector configuration"
           echo "=================================================="
 
           grep -E \
-            'CONFIG_CC_STACKPROTECTOR|CONFIG_STACKPROTECTOR' \
+            'CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
             out/.config \
             || true
 
           # --------------------------------------------------------
-          # Show compiler configuration
+          # TEMPORARY DIAGNOSTIC
+          #
+          # The original Xiaomi kernel requests:
+          #
+          # CONFIG_CC_STACKPROTECTOR_STRONG=y
+          #
+          # The kernel's cc-option test rejects the combined compiler
+          # command even though Clang itself accepts the flag.
+          #
+          # Disable STRONG temporarily so that we can get past
+          # prepare-compiler-check and expose the real compiler/build
+          # error, if any.
+          #
+          # This is NOT intended to be the final kernel configuration.
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "TEMPORARY DIAGNOSTIC"
+          echo "Disable CC_STACKPROTECTOR_STRONG"
+          echo "=================================================="
+
+          test -f scripts/config
+
+          chmod +x scripts/config
+
+          ./scripts/config \
+            --file out/.config \
+            --disable CC_STACKPROTECTOR_STRONG \
+            --enable CC_STACKPROTECTOR_NONE
+
+          # --------------------------------------------------------
+          # Re-normalize configuration
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Run olddefconfig"
+          echo "=================================================="
+
+          make O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
+            CC="$CLANG" \
+            CLANG_TRIPLE="$CLANG_TRIPLE" \
+            olddefconfig
+
+          # --------------------------------------------------------
+          # Verify modified configuration
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Diagnostic stack protector configuration"
+          echo "=================================================="
+
+          grep -E \
+            'CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
+            out/.config \
+            || true
+
+          # --------------------------------------------------------
+          # Verify compiler configuration
           # --------------------------------------------------------
 
           echo
@@ -301,32 +390,24 @@ jobs:
             || true
 
           # --------------------------------------------------------
-          # Check generated Makefile
+          # Verify generated configuration files
           # --------------------------------------------------------
 
           echo
           echo "=================================================="
-          echo "Generated Makefile compiler variables"
-          echo "=================================================="
-
-          grep -E \
-            '^(CC|CROSS_COMPILE|CLANG_TRIPLE)[[:space:]]*=' \
-            out/Makefile \
-            || true
-
-          # --------------------------------------------------------
-          # Kernel config generated
-          # --------------------------------------------------------
-
-          echo
-          echo "=================================================="
-          echo "Kernel config generated"
+          echo "Generated configuration files"
           echo "=================================================="
 
           test -f out/.config
 
+          test -f out/include/config/auto.conf \
+            || true
+
           # --------------------------------------------------------
           # Build kernel
+          #
+          # V=1 is intentional:
+          # it makes the actual compiler commands visible.
           # --------------------------------------------------------
 
           echo
@@ -340,38 +421,62 @@ jobs:
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
             CC="$CLANG" \
             CLANG_TRIPLE="$CLANG_TRIPLE" \
+            V=1 \
             -j"$(nproc)"
 
       # ============================================================
       # 9. Display build output
       # ============================================================
       - name: Show kernel output
+        if: always()
         run: |
+          set +e
+
           echo "=================================================="
           echo "Kernel output directory"
           echo "=================================================="
 
-          find out/arch/arm64/boot \
-            -maxdepth 1 \
-            -type f \
-            -printf '%f\n' \
-            | sort
+          if [ -d out/arch/arm64/boot ]; then
+            find out/arch/arm64/boot \
+              -maxdepth 1 \
+              -type f \
+              -printf '%f\n' \
+              | sort
+          else
+            echo "out/arch/arm64/boot does not exist."
+          fi
 
           echo
           echo "=================================================="
           echo "DTB files"
           echo "=================================================="
 
-          find out/arch/arm64/boot/dts \
-            -type f \
-            \( -name "*.dtb" -o -name "*.dtbo" \) \
-            2>/dev/null \
-            | sort || true
+          if [ -d out/arch/arm64/boot/dts ]; then
+            find out/arch/arm64/boot/dts \
+              -type f \
+              \( -name "*.dtb" -o -name "*.dtbo" \) \
+              | sort
+          else
+            echo "DTB directory does not exist."
+          fi
+
+          echo
+          echo "=================================================="
+          echo "Kernel configuration"
+          echo "=================================================="
+
+          if [ -f out/.config ]; then
+            grep -E \
+              'CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
+              out/.config \
+              || true
+          fi
 
       # ============================================================
       # 10. Upload kernel artifacts
       # ============================================================
       - name: Upload kernel
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mi8-dipper-kernel
