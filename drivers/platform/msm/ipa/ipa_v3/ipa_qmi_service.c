@@ -1184,12 +1184,11 @@ static void ipa3_q6_clnt_svc_arrive(struct work_struct *work)
 		return;
 	}
 	if (rc != 0) {
-		IPAWANERR("ipa3_qmi_init_modem_send_sync_msg failed\n");
+		IPAWANERR("ipa3_qmi_init_modem_send_sync_msg failed, rc=%d\n", rc);
 		/*
 		 * This is a very unexpected scenario, which requires a kernel
 		 * panic in order to force dumps for QMI/Q6 side analysis.
 		 */
-		BUG();
 		return;
 	}
 	ipa3_qmi_modem_init_fin = true;
