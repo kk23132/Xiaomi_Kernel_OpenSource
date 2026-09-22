@@ -8,15 +8,22 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # ============================================================
+      # 1. Checkout Xiaomi kernel source
+      # ============================================================
       - name: Checkout source
         uses: actions/checkout@v5
         with:
           ref: dipper-q-oss
           fetch-depth: 1
 
+      # ============================================================
+      # 2. Install build dependencies
+      # ============================================================
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             bc \
             bison \
@@ -26,11 +33,22 @@ jobs:
             libelf-dev \
             device-tree-compiler \
             python3 \
-            rsync
+            rsync \
+            cpio \
+            zip \
+            unzip
 
+      # ============================================================
+      # 3. Download AOSP Clang r365631c
+      #
+      # r365631c is a directory, NOT a git branch.
+      # We clone the Android 11 release tree and sparse-checkout
+      # only the required clang-r365631c directory.
+      # ============================================================
       - name: Download AOSP Clang 9
         run: |
-          git clone --depth=1 \
+          git clone \
+            --depth=1 \
             -b android11-qpr3-release \
             --filter=blob:none \
             --sparse \
@@ -38,67 +56,184 @@ jobs:
             clang-toolchain
 
           cd clang-toolchain
+
           git sparse-checkout set clang-r365631c
+
           cd ..
 
-      - name: Download AOSP GCC 4.9
+      # ============================================================
+      # 4. Download AOSP GCC 4.9 - AArch64
+      #
+      # IMPORTANT:
+      # Do NOT use --sparse here.
+      # The bin/ directory must be fully checked out.
+      # ============================================================
+      - name: Download AOSP GCC 4.9 AArch64
         run: |
-          git clone --depth=1 \
+          git clone \
+            --depth=1 \
             -b android10-release \
-            --filter=blob:none \
-            --sparse \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
             gcc64
 
-          git clone --depth=1 \
+      # ============================================================
+      # 5. Download AOSP GCC 4.9 - ARM32
+      # ============================================================
+      - name: Download AOSP GCC 4.9 ARM32
+        run: |
+          git clone \
+            --depth=1 \
             -b android10-release \
-            --filter=blob:none \
-            --sparse \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
             gcc32
 
+      # ============================================================
+      # 6. Verify toolchains
+      # ============================================================
       - name: Verify toolchains
         run: |
-          echo "=== Clang ==="
+          echo "=================================================="
+          echo "Clang"
+          echo "=================================================="
+
           ./clang-toolchain/clang-r365631c/bin/clang --version
 
-          echo "=== GCC64 ==="
+          echo
+          echo "=================================================="
+          echo "AArch64 GCC"
+          echo "=================================================="
+
           ./gcc64/bin/aarch64-linux-android-gcc --version
 
-          echo "=== GCC32 ==="
+          echo
+          echo "=================================================="
+          echo "AArch64 kernel GCC"
+          echo "=================================================="
+
+          ./gcc64/bin/aarch64-linux-androidkernel-gcc --version
+
+          echo
+          echo "=================================================="
+          echo "ARM32 GCC"
+          echo "=================================================="
+
           ./gcc32/bin/arm-linux-androideabi-gcc --version
 
+          echo
+          echo "=================================================="
+          echo "ARM32 kernel GCC"
+          echo "=================================================="
+
+          ./gcc32/bin/arm-linux-androidkernel-gcc --version
+
+          echo
+          echo "=================================================="
+          echo "Toolchain files"
+          echo "=================================================="
+
+          test -x ./clang-toolchain/clang-r365631c/bin/clang
+          test -x ./gcc64/bin/aarch64-linux-android-gcc
+          test -x ./gcc64/bin/aarch64-linux-androidkernel-gcc
+          test -x ./gcc32/bin/arm-linux-androideabi-gcc
+          test -x ./gcc32/bin/arm-linux-androidkernel-gcc
+
+          echo "All required toolchains found."
+
+      # ============================================================
+      # 7. Check source configuration
+      # ============================================================
       - name: Show source configuration
         run: |
-          echo "=== Branch ==="
+          echo "=================================================="
+          echo "Git branch"
+          echo "=================================================="
+
           git branch --show-current
 
-          echo "=== Commit ==="
+          echo
+          echo "=================================================="
+          echo "Git commit"
+          echo "=================================================="
+
           git rev-parse HEAD
 
-          echo "=== Kernel version ==="
+          echo
+          echo "=================================================="
+          echo "Kernel version"
+          echo "=================================================="
+
           make kernelversion
 
-          echo "=== Dipper config ==="
-          test -f arch/arm64/configs/dipper_user_defconfig
-          echo "dipper_user_defconfig found"
+          echo
+          echo "=================================================="
+          echo "Dipper defconfig"
+          echo "=================================================="
 
+          test -f arch/arm64/configs/dipper_user_defconfig
+
+          echo "Found:"
+          echo "arch/arm64/configs/dipper_user_defconfig"
+
+      # ============================================================
+      # 8. Build kernel
+      # ============================================================
       - name: Build kernel
         env:
           ARCH: arm64
           SUBARCH: arm64
         run: |
+          # --------------------------------------------------------
+          # Toolchains
+          # --------------------------------------------------------
+
           export CLANG="$GITHUB_WORKSPACE/clang-toolchain/clang-r365631c/bin/clang"
-          export GCC64="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-"
-          export GCC32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-"
+
+          export GCC64="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-androidkernel-"
+
+          export GCC32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androidkernel-"
+
+          # --------------------------------------------------------
+          # PATH
+          # --------------------------------------------------------
 
           export PATH="$GITHUB_WORKSPACE/clang-toolchain/clang-r365631c/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
 
+          # --------------------------------------------------------
+          # Kernel build variables
+          # --------------------------------------------------------
+
           export CROSS_COMPILE="$GCC64"
+
           export CROSS_COMPILE_ARM32="$GCC32"
+
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
-          echo "=== Configure ==="
+          # --------------------------------------------------------
+          # Print configuration
+          # --------------------------------------------------------
+
+          echo "=================================================="
+          echo "Build environment"
+          echo "=================================================="
+
+          echo "ARCH=$ARCH"
+          echo "SUBARCH=$SUBARCH"
+          echo "CLANG=$CLANG"
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
+          echo "CLANG_TRIPLE=$CLANG_TRIPLE"
+
+          echo
+          echo "=================================================="
+          echo "Compiler"
+          echo "=================================================="
+
+          "$CLANG" --version
+
+          echo
+          echo "=================================================="
+          echo "Configure kernel"
+          echo "=================================================="
 
           make O=out \
             ARCH=arm64 \
@@ -108,7 +243,17 @@ jobs:
             CLANG_TRIPLE="$CLANG_TRIPLE" \
             dipper_user_defconfig
 
-          echo "=== Build ==="
+          echo
+          echo "=================================================="
+          echo "Kernel config generated"
+          echo "=================================================="
+
+          test -f out/.config
+
+          echo
+          echo "=================================================="
+          echo "Build kernel"
+          echo "=================================================="
 
           make O=out \
             ARCH=arm64 \
@@ -118,14 +263,35 @@ jobs:
             CLANG_TRIPLE="$CLANG_TRIPLE" \
             -j"$(nproc)"
 
-      - name: Show output
+      # ============================================================
+      # 9. Display build output
+      # ============================================================
+      - name: Show kernel output
         run: |
-          echo "=== Kernel output ==="
+          echo "=================================================="
+          echo "Kernel output directory"
+          echo "=================================================="
+
           find out/arch/arm64/boot \
             -maxdepth 1 \
             -type f \
-            -printf '%f\n' | sort
+            -printf '%f\n' \
+            | sort
 
+          echo
+          echo "=================================================="
+          echo "DTB files"
+          echo "=================================================="
+
+          find out/arch/arm64/boot/dts \
+            -type f \
+            \( -name "*.dtb" -o -name "*.dtbo" \) \
+            2>/dev/null \
+            | sort || true
+
+      # ============================================================
+      # 10. Upload kernel artifacts
+      # ============================================================
       - name: Upload kernel
         uses: actions/upload-artifact@v4
         with:
@@ -136,4 +302,7 @@ jobs:
             out/arch/arm64/boot/Image.gz-dtb
             out/arch/arm64/boot/dts/**/*.dtb
             out/arch/arm64/boot/dts/**/*.dtbo
+            out/.config
+            out/System.map
+            out/vmlinux
           if-no-files-found: warn
