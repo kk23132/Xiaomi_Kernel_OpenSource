@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+
       # ============================================================
       # 1. Checkout Xiaomi kernel source
       # ============================================================
@@ -40,10 +41,6 @@ jobs:
 
       # ============================================================
       # 3. Download AOSP Clang r365631c
-      #
-      # r365631c is a directory, NOT a git branch.
-      # We clone the Android 11 release tree and sparse-checkout
-      # only the required clang-r365631c directory.
       # ============================================================
       - name: Download AOSP Clang 9
         run: |
@@ -63,10 +60,6 @@ jobs:
 
       # ============================================================
       # 4. Download AOSP GCC 4.9 - AArch64
-      #
-      # IMPORTANT:
-      # Do NOT use --sparse here.
-      # The bin/ directory must be fully checked out.
       # ============================================================
       - name: Download AOSP GCC 4.9 AArch64
         run: |
@@ -182,6 +175,7 @@ jobs:
           ARCH: arm64
           SUBARCH: arm64
         run: |
+
           # --------------------------------------------------------
           # Toolchains
           # --------------------------------------------------------
@@ -223,6 +217,10 @@ jobs:
           echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
           echo "CLANG_TRIPLE=$CLANG_TRIPLE"
 
+          # --------------------------------------------------------
+          # Compiler
+          # --------------------------------------------------------
+
           echo
           echo "=================================================="
           echo "Compiler"
@@ -230,10 +228,41 @@ jobs:
 
           "$CLANG" --version
 
+          # --------------------------------------------------------
+          # Test compiler
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Test -fstack-protector-strong"
+          echo "=================================================="
+
+          cat > /tmp/stack_protector_test.c <<'EOF'
+          int main(void)
+          {
+              return 0;
+          }
+          EOF
+
+          "$CLANG" \
+            -target aarch64-linux-gnu \
+            -fstack-protector-strong \
+            -c /tmp/stack_protector_test.c \
+            -o /tmp/stack_protector_test.o
+
+          echo
+          echo "SUCCESS: Clang accepts -fstack-protector-strong"
+
+          # --------------------------------------------------------
+          # Configure kernel
+          # --------------------------------------------------------
+
           echo
           echo "=================================================="
           echo "Configure kernel"
           echo "=================================================="
+
+          rm -rf out
 
           make O=out \
             ARCH=arm64 \
@@ -243,12 +272,62 @@ jobs:
             CLANG_TRIPLE="$CLANG_TRIPLE" \
             dipper_user_defconfig
 
+          # --------------------------------------------------------
+          # Check generated configuration
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Stack protector configuration"
+          echo "=================================================="
+
+          grep -E \
+            'CONFIG_CC_STACKPROTECTOR|CONFIG_STACKPROTECTOR' \
+            out/.config \
+            || true
+
+          # --------------------------------------------------------
+          # Show compiler configuration
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Compiler configuration"
+          echo "=================================================="
+
+          grep -E \
+            'CONFIG_CC_IS_CLANG|CONFIG_CLANG_VERSION|CONFIG_CC_STACKPROTECTOR' \
+            out/.config \
+            || true
+
+          # --------------------------------------------------------
+          # Check generated Makefile
+          # --------------------------------------------------------
+
+          echo
+          echo "=================================================="
+          echo "Generated Makefile compiler variables"
+          echo "=================================================="
+
+          grep -E \
+            '^(CC|CROSS_COMPILE|CLANG_TRIPLE)[[:space:]]*=' \
+            out/Makefile \
+            || true
+
+          # --------------------------------------------------------
+          # Kernel config generated
+          # --------------------------------------------------------
+
           echo
           echo "=================================================="
           echo "Kernel config generated"
           echo "=================================================="
 
           test -f out/.config
+
+          # --------------------------------------------------------
+          # Build kernel
+          # --------------------------------------------------------
 
           echo
           echo "=================================================="
