@@ -43,8 +43,6 @@ jobs:
 
       # ============================================================
       # 3. Download AOSP Clang r365631c
-      #
-      # r365631c is a directory, not a branch.
       # ============================================================
       - name: Download AOSP Clang 9
         run: |
@@ -133,6 +131,13 @@ jobs:
 
           echo
           echo "=================================================="
+          echo "Host GCC"
+          echo "=================================================="
+
+          gcc --version
+
+          echo
+          echo "=================================================="
           echo "Toolchain files"
           echo "=================================================="
 
@@ -218,7 +223,18 @@ jobs:
           export CLANG_TRIPLE="aarch64-linux-gnu-"
 
           # --------------------------------------------------------
-          # Print build environment
+          # Host build compatibility
+          #
+          # Linux 4.9's old scripts/dtc is incompatible with the
+          # default -fno-common behavior of modern GCC.
+          #
+          # This affects HOSTCC tools only, not the ARM64 kernel.
+          # --------------------------------------------------------
+
+          export HOSTCFLAGS="-fcommon"
+
+          # --------------------------------------------------------
+          # Print environment
           # --------------------------------------------------------
 
           echo "=================================================="
@@ -231,6 +247,7 @@ jobs:
           echo "CROSS_COMPILE=$CROSS_COMPILE"
           echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
           echo "CLANG_TRIPLE=$CLANG_TRIPLE"
+          echo "HOSTCFLAGS=$HOSTCFLAGS"
 
           # --------------------------------------------------------
           # Compiler
@@ -244,32 +261,39 @@ jobs:
           "$CLANG" --version
 
           # --------------------------------------------------------
-          # Test compiler support for stack protector
+          # Remove incompatible old Clang warning option
+          #
+          # This is required because Clang 9 reports:
+          #
+          # warning: unknown warning option
+          # '-Wno-undefined-optimized'
+          #
+          # The old kernel's cc-option test uses -Werror, so that
+          # warning can incorrectly make -fstack-protector-strong
+          # appear unsupported.
           # --------------------------------------------------------
 
           echo
           echo "=================================================="
-          echo "Test -fstack-protector-strong"
+          echo "Fix old Clang warning option"
           echo "=================================================="
 
-          cat > /tmp/stack_protector_test.c <<'EOF'
-          int main(void)
-          {
-              return 0;
-          }
-          EOF
+          grep -n "Wno-undefined-optimized" Makefile || true
 
-          "$CLANG" \
-            -target aarch64-linux-gnu \
-            -fstack-protector-strong \
-            -c /tmp/stack_protector_test.c \
-            -o /tmp/stack_protector_test.o
+          sed -i '/Wno-undefined-optimized/d' Makefile
 
           echo
-          echo "SUCCESS: Clang accepts -fstack-protector-strong"
+          echo "Remaining references:"
+          grep -R -n \
+            --exclude-dir=.git \
+            --exclude-dir=out \
+            "Wno-undefined-optimized" \
+            Makefile arch scripts \
+            2>/dev/null \
+            || true
 
           # --------------------------------------------------------
-          # Prepare clean output directory
+          # Clean output directory
           # --------------------------------------------------------
 
           echo
@@ -296,53 +320,22 @@ jobs:
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
             CC="$CLANG" \
             CLANG_TRIPLE="$CLANG_TRIPLE" \
+            HOSTCFLAGS="$HOSTCFLAGS" \
             dipper_user_defconfig
 
           # --------------------------------------------------------
-          # Verify generated configuration
+          # Verify original stack protector configuration
           # --------------------------------------------------------
 
           echo
           echo "=================================================="
-          echo "Original stack protector configuration"
+          echo "Stack protector configuration"
           echo "=================================================="
 
           grep -E \
             'CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
             out/.config \
             || true
-
-          # --------------------------------------------------------
-          # TEMPORARY DIAGNOSTIC
-          #
-          # The original Xiaomi kernel requests:
-          #
-          # CONFIG_CC_STACKPROTECTOR_STRONG=y
-          #
-          # The kernel's cc-option test rejects the combined compiler
-          # command even though Clang itself accepts the flag.
-          #
-          # Disable STRONG temporarily so that we can get past
-          # prepare-compiler-check and expose the real compiler/build
-          # error, if any.
-          #
-          # This is NOT intended to be the final kernel configuration.
-          # --------------------------------------------------------
-
-          echo
-          echo "=================================================="
-          echo "TEMPORARY DIAGNOSTIC"
-          echo "Disable CC_STACKPROTECTOR_STRONG"
-          echo "=================================================="
-
-          test -f scripts/config
-
-          chmod +x scripts/config
-
-          ./scripts/config \
-            --file out/.config \
-            --disable CC_STACKPROTECTOR_STRONG \
-            --enable CC_STACKPROTECTOR_NONE
 
           # --------------------------------------------------------
           # Re-normalize configuration
@@ -359,55 +352,27 @@ jobs:
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
             CC="$CLANG" \
             CLANG_TRIPLE="$CLANG_TRIPLE" \
+            HOSTCFLAGS="$HOSTCFLAGS" \
             olddefconfig
 
           # --------------------------------------------------------
-          # Verify modified configuration
+          # Verify final configuration
           # --------------------------------------------------------
 
           echo
           echo "=================================================="
-          echo "Diagnostic stack protector configuration"
+          echo "Final kernel configuration"
           echo "=================================================="
 
           grep -E \
-            'CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
+            'CONFIG_CC_IS_CLANG|CONFIG_CLANG_VERSION|CONFIG_CC_STACKPROTECTOR|CONFIG_CC_STACKPROTECTOR_NONE|CONFIG_CC_STACKPROTECTOR_REGULAR|CONFIG_CC_STACKPROTECTOR_STRONG' \
             out/.config \
             || true
-
-          # --------------------------------------------------------
-          # Verify compiler configuration
-          # --------------------------------------------------------
-
-          echo
-          echo "=================================================="
-          echo "Compiler configuration"
-          echo "=================================================="
-
-          grep -E \
-            'CONFIG_CC_IS_CLANG|CONFIG_CLANG_VERSION|CONFIG_CC_STACKPROTECTOR' \
-            out/.config \
-            || true
-
-          # --------------------------------------------------------
-          # Verify generated configuration files
-          # --------------------------------------------------------
-
-          echo
-          echo "=================================================="
-          echo "Generated configuration files"
-          echo "=================================================="
 
           test -f out/.config
 
-          test -f out/include/config/auto.conf \
-            || true
-
           # --------------------------------------------------------
           # Build kernel
-          #
-          # V=1 is intentional:
-          # it makes the actual compiler commands visible.
           # --------------------------------------------------------
 
           echo
@@ -421,6 +386,7 @@ jobs:
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" \
             CC="$CLANG" \
             CLANG_TRIPLE="$CLANG_TRIPLE" \
+            HOSTCFLAGS="$HOSTCFLAGS" \
             V=1 \
             -j"$(nproc)"
 
