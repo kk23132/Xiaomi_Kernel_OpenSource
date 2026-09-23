@@ -1177,20 +1177,35 @@ static void ipa3_q6_clnt_svc_arrive(struct work_struct *work)
 	/* Initialize modem IPA-driver */
 	IPAWANDBG("send ipa3_qmi_init_modem_send_sync_msg to modem\n");
 	rc = ipa3_qmi_init_modem_send_sync_msg();
-	if ((rc == -ENETRESET) || (rc == -ENODEV)) {
-		IPAWANERR(
-			"ipa3_qmi_init_modem_send_sync_msg failed due to SSR!\n");
-		/* Cleanup will take place when ipa3_wwan_remove is called */
-		return;
-	}
 	if (rc != 0) {
-		IPAWANERR("ipa3_qmi_init_modem_send_sync_msg failed, rc=%d\n", rc);
-		/*
-		 * This is a very unexpected scenario, which requires a kernel
-		 * panic in order to force dumps for QMI/Q6 side analysis.
-		 */
-		return;
-	}
+    if ((rc == -ENETRESET) || (rc == -ENODEV)) {
+        IPAWANERR(
+            "ipa3_qmi_init_modem_send_sync_msg failed due to SSR, rc=%d\n",
+            rc);
+    } else {
+        IPAWANERR(
+            "ipa3_qmi_init_modem_send_sync_msg failed, rc=%d\n",
+            rc);
+    }
+
+    /*
+     * Modem/IPA QMI initialization failed.
+     *
+     * Do not BUG()/panic the kernel.
+     * Keep modem initialization state as incomplete.
+     */
+    ipa3_qmi_modem_init_fin = false;
+
+    /*
+     * Destroy the Q6 QMI client through the existing
+     * serialized cleanup work.
+     */
+    if (!workqueues_stopped && ipa_clnt_req_workqueue)
+        queue_delayed_work(ipa_clnt_req_workqueue,
+            &ipa3_work_svc_exit, 0);
+
+    return;
+}
 	ipa3_qmi_modem_init_fin = true;
 
 	/* got modem_init_cmplt_req already, load uc-related register */
@@ -1227,9 +1242,13 @@ static void ipa3_q6_clnt_svc_arrive(struct work_struct *work)
 
 static void ipa3_q6_clnt_svc_exit(struct work_struct *work)
 {
-	qmi_handle_destroy(ipa_q6_clnt);
-	ipa_q6_clnt_reset = 1;
-	ipa_q6_clnt = NULL;
+    if (ipa_q6_clnt) {
+        qmi_handle_destroy(ipa_q6_clnt);
+        ipa_q6_clnt = NULL;
+    }
+
+    ipa_q6_clnt_reset = 1;
+    ipa3_qmi_modem_init_fin = false;
 }
 
 
