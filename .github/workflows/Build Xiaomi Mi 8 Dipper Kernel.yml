@@ -65,22 +65,27 @@ jobs:
           cd "$GITHUB_WORKSPACE/toolchains"
 
           echo "=========================================="
-          echo "Downloading AOSP Clang r365631c"
+          echo "Downloading AOSP Clang"
+          echo "Branch: android10-release"
+          echo "Version: clang-r365631c"
           echo "=========================================="
 
           git clone \
             --depth=1 \
-            --branch android11-release \
+            --filter=blob:none \
+            --sparse \
+            --branch android10-release \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             clang-repo
 
+          cd clang-repo
+
+          git sparse-checkout set clang-r365631c
+
+          cd ..
+
           if [ ! -d "clang-repo/clang-r365631c" ]; then
-            echo "ERROR: clang-r365631c not found!"
-
-            echo
-            echo "Available Clang versions:"
-            ls -1 clang-repo | grep '^clang-' || true
-
+            echo "ERROR: clang-r365631c was not found!"
             exit 1
           fi
 
@@ -98,138 +103,82 @@ jobs:
           clang-r365631c/bin/clang --version
 
 
-      - name: Download GCC 4.9 AArch64
+      - name: Download AOSP GCC 4.9 AArch64
         run: |
           cd "$GITHUB_WORKSPACE/toolchains"
 
           echo "=========================================="
           echo "Downloading AArch64 GCC 4.9"
+          echo "Branch: android10-release"
           echo "=========================================="
 
           git clone \
             --depth=1 \
+            --branch android10-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
             gcc64
 
           echo
           echo "=========================================="
-          echo "Searching AArch64 GCC"
+          echo "Checking AArch64 GCC"
           echo "=========================================="
 
-          find gcc64 \
-            -type f \
-            \( \
-              -name 'aarch64-linux-android-gcc' \
-              -o \
-              -name 'aarch64-linux-android-g++' \
-            \) \
-            -print
-
-          GCC64=$(find "$GITHUB_WORKSPACE/toolchains/gcc64" \
-            -type f \
-            -name 'aarch64-linux-android-gcc' \
-            -print -quit)
-
-          if [ -z "$GCC64" ]; then
-            echo
-            echo "ERROR: aarch64-linux-android-gcc was not found!"
+          if [ ! -f "gcc64/bin/aarch64-linux-android-gcc" ]; then
+            echo "ERROR: AArch64 GCC was not found!"
 
             echo
-            echo "gcc64 directory:"
-            find gcc64 -maxdepth 4 -type f | head -200
+            echo "Contents of gcc64:"
+            find gcc64 -maxdepth 2 -type f | head -100
 
             exit 1
           fi
 
-          GCC64_DIR=$(dirname "$GCC64")
+          echo
+          echo "AArch64 GCC:"
+          ls -lh gcc64/bin/aarch64-linux-android-gcc
 
           echo
-          echo "Found GCC:"
-          echo "$GCC64"
-
-          echo
-          echo "GCC directory:"
-          echo "$GCC64_DIR"
-
-          echo
-          echo "GCC version:"
-          "$GCC64" --version
-
-          echo
-          echo "=========================================="
-          echo "Saving GCC64 path"
-          echo "=========================================="
-
-          echo "GCC64=$GCC64" >> "$GITHUB_ENV"
-
-          echo "GCC64_DIR=$GCC64_DIR" >> "$GITHUB_ENV"
+          echo "AArch64 GCC version:"
+          gcc64/bin/aarch64-linux-android-gcc --version
 
 
-      - name: Download GCC 4.9 ARM32
+      - name: Download AOSP GCC 4.9 ARM32
         run: |
           cd "$GITHUB_WORKSPACE/toolchains"
 
           echo "=========================================="
           echo "Downloading ARM32 GCC 4.9"
+          echo "Branch: android10-release"
           echo "=========================================="
 
           git clone \
             --depth=1 \
+            --branch android10-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
             gcc32
 
           echo
           echo "=========================================="
-          echo "Searching ARM32 GCC"
+          echo "Checking ARM32 GCC"
           echo "=========================================="
 
-          find gcc32 \
-            -type f \
-            \( \
-              -name 'arm-linux-androideabi-gcc' \
-              -o \
-              -name 'arm-linux-androideabi-g++' \
-            \) \
-            -print
-
-          GCC32=$(find "$GITHUB_WORKSPACE/toolchains/gcc32" \
-            -type f \
-            -name 'arm-linux-androideabi-gcc' \
-            -print -quit)
-
-          if [ -z "$GCC32" ]; then
-            echo
-            echo "ERROR: arm-linux-androideabi-gcc was not found!"
+          if [ ! -f "gcc32/bin/arm-linux-androideabi-gcc" ]; then
+            echo "ERROR: ARM32 GCC was not found!"
 
             echo
-            echo "gcc32 directory:"
-            find gcc32 -maxdepth 4 -type f | head -200
+            echo "Contents of gcc32:"
+            find gcc32 -maxdepth 2 -type f | head -100
 
             exit 1
           fi
 
-          GCC32_DIR=$(dirname "$GCC32")
+          echo
+          echo "ARM32 GCC:"
+          ls -lh gcc32/bin/arm-linux-androideabi-gcc
 
           echo
-          echo "Found GCC:"
-          echo "$GCC32"
-
-          echo
-          echo "GCC directory:"
-          echo "$GCC32_DIR"
-
-          echo
-          echo "GCC version:"
-          "$GCC32" --version
-
-          echo
-          echo "=========================================="
-          echo "Saving GCC32 path"
-          echo "=========================================="
-
-          echo "GCC32=$GCC32" >> "$GITHUB_ENV"
-
-          echo "GCC32_DIR=$GCC32_DIR" >> "$GITHUB_ENV"
+          echo "ARM32 GCC version:"
+          gcc32/bin/arm-linux-androideabi-gcc --version
 
 
       - name: Setup toolchain
@@ -240,12 +189,9 @@ jobs:
 
           echo "$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin" >> "$GITHUB_PATH"
 
-          echo "$GCC64_DIR" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> "$GITHUB_PATH"
 
-          echo "$GCC32_DIR" >> "$GITHUB_PATH"
-
-          echo
-          echo "PATH entries added."
+          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> "$GITHUB_PATH"
 
 
       - name: Install stock running config
@@ -345,13 +291,13 @@ jobs:
         run: |
           export ARCH=arm64
 
-          export CROSS_COMPILE="$GCC64_DIR/aarch64-linux-android-"
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc64/bin/aarch64-linux-android-"
 
-          export CROSS_COMPILE_ARM32="$GCC32_DIR/arm-linux-androideabi-"
+          export CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-"
 
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          export PATH="$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin:$GCC64_DIR:$GCC32_DIR:$PATH"
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin:$GITHUB_WORKSPACE/toolchains/gcc64/bin:$GITHUB_WORKSPACE/toolchains/gcc32/bin:$PATH"
 
           echo "=========================================="
           echo "Build environment"
@@ -367,7 +313,7 @@ jobs:
 
           echo
           echo "=========================================="
-          echo "Compiler"
+          echo "Clang"
           echo "=========================================="
 
           clang --version
@@ -377,14 +323,14 @@ jobs:
           echo "AArch64 GCC"
           echo "=========================================="
 
-          "$GCC64" --version
+          aarch64-linux-android-gcc --version
 
           echo
           echo "=========================================="
           echo "ARM32 GCC"
           echo "=========================================="
 
-          "$GCC32" --version
+          arm-linux-androideabi-gcc --version
 
           echo
           echo "=========================================="
