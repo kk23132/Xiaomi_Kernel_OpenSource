@@ -1,22 +1,24 @@
-name: Build Xiaomi Mi 8 Dipper Kernel
+name: Build Xiaomi Mi 8 Kernel
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Dipper Kernel
     runs-on: ubuntu-22.04
 
     steps:
-
-      - name: Checkout source
+      # ============================================================
+      # 1. Checkout kernel source
+      # ============================================================
+      - name: Checkout kernel source
         uses: actions/checkout@v5
         with:
-          ref: dipper-q-oss
           fetch-depth: 1
 
-
+      # ============================================================
+      # 2. Install build dependencies
+      # ============================================================
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -26,311 +28,203 @@ jobs:
             bison \
             build-essential \
             ccache \
-            curl \
             flex \
-            gawk \
             git \
-            libelf-dev \
             libssl-dev \
+            libelf-dev \
             lz4 \
-            make \
+            libncurses5-dev \
+            libncurses-dev \
             python3 \
             rsync \
             unzip \
             wget \
             xz-utils
 
-
-      - name: Prepare directories
+      # ============================================================
+      # 3. Download AOSP Clang r349610
+      #
+      # Android 10 kernel 4.9 uses clang-r349610.
+      # IMPORTANT:
+      # Do NOT use clang-r365631c here.
+      # ============================================================
+      - name: Download AOSP Clang r349610
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/toolchains"
-          mkdir -p "$GITHUB_WORKSPACE/out"
-
-          echo "=========================================="
-          echo "Kernel source"
-          echo "=========================================="
-
-          pwd
-
-          echo
-          echo "=========================================="
-          echo "Running config"
-          echo "=========================================="
-
-          ls -lh config/running.config
-
-
-      - name: Download AOSP Clang r365631c
-        run: |
-          cd "$GITHUB_WORKSPACE/toolchains"
-
-          echo "=========================================="
-          echo "Downloading AOSP Clang"
-          echo "Branch: android10-release"
-          echo "Version: clang-r365631c"
-          echo "=========================================="
-
           git clone \
             --depth=1 \
-            --filter=blob:none \
-            --sparse \
             --branch android10-release \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             clang-repo
 
-          cd clang-repo
+          test -x clang-repo/clang-r349610/bin/clang
 
-          git sparse-checkout set clang-r365631c
+          echo "========== Clang version =========="
+          clang-repo/clang-r349610/bin/clang --version
 
-          cd ..
-
-          if [ ! -d "clang-repo/clang-r365631c" ]; then
-            echo "ERROR: clang-r365631c was not found!"
-            exit 1
-          fi
-
-          mv \
-            clang-repo/clang-r365631c \
-            clang-r365631c
-
-          rm -rf clang-repo
-
-          echo
-          echo "=========================================="
-          echo "Clang version"
-          echo "=========================================="
-
-          clang-r365631c/bin/clang --version
-
-
-      - name: Download AOSP GCC 4.9 AArch64
+      # ============================================================
+      # 4. Download AOSP GCC 4.9 AArch64
+      #
+      # Use Android 10 release branch.
+      # Do NOT clone main.
+      # ============================================================
+      - name: Download AOSP GCC 4.9
         run: |
-          cd "$GITHUB_WORKSPACE/toolchains"
-
-          echo "=========================================="
-          echo "Downloading AArch64 GCC 4.9"
-          echo "Branch: android10-release"
-          echo "=========================================="
-
           git clone \
             --depth=1 \
             --branch android10-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
             gcc64
 
-          echo
-          echo "=========================================="
-          echo "Checking AArch64 GCC"
-          echo "=========================================="
+          test -x gcc64/bin/aarch64-linux-android-gcc
 
-          if [ ! -f "gcc64/bin/aarch64-linux-android-gcc" ]; then
-            echo "ERROR: AArch64 GCC was not found!"
-
-            echo
-            echo "Contents of gcc64:"
-            find gcc64 -maxdepth 2 -type f | head -100
-
-            exit 1
-          fi
-
-          echo
-          echo "AArch64 GCC:"
-          ls -lh gcc64/bin/aarch64-linux-android-gcc
-
-          echo
-          echo "AArch64 GCC version:"
+          echo "========== GCC version =========="
           gcc64/bin/aarch64-linux-android-gcc --version
 
-
-      - name: Download AOSP GCC 4.9 ARM32
-        run: |
-          cd "$GITHUB_WORKSPACE/toolchains"
-
-          echo "=========================================="
-          echo "Downloading ARM32 GCC 4.9"
-          echo "Branch: android10-release"
-          echo "=========================================="
-
-          git clone \
-            --depth=1 \
-            --branch android10-release \
-            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
-            gcc32
-
-          echo
-          echo "=========================================="
-          echo "Checking ARM32 GCC"
-          echo "=========================================="
-
-          if [ ! -f "gcc32/bin/arm-linux-androideabi-gcc" ]; then
-            echo "ERROR: ARM32 GCC was not found!"
-
-            echo
-            echo "Contents of gcc32:"
-            find gcc32 -maxdepth 2 -type f | head -100
-
-            exit 1
-          fi
-
-          echo
-          echo "ARM32 GCC:"
-          ls -lh gcc32/bin/arm-linux-androideabi-gcc
-
-          echo
-          echo "ARM32 GCC version:"
-          gcc32/bin/arm-linux-androideabi-gcc --version
-
-
+      # ============================================================
+      # 5. Prepare toolchain environment
+      # ============================================================
       - name: Setup toolchain
         run: |
-          echo "=========================================="
-          echo "Setting up toolchain"
-          echo "=========================================="
+          echo "CLANG=${GITHUB_WORKSPACE}/clang-repo/clang-r349610/bin" >> $GITHUB_ENV
+          echo "GCC64=${GITHUB_WORKSPACE}/gcc64/bin" >> $GITHUB_ENV
 
-          echo "$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin" >> "$GITHUB_PATH"
+          echo "${GITHUB_WORKSPACE}/clang-repo/clang-r349610/bin" >> $GITHUB_PATH
+          echo "${GITHUB_WORKSPACE}/gcc64/bin" >> $GITHUB_PATH
 
-          echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> "$GITHUB_PATH"
-
-          echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> "$GITHUB_PATH"
-
-
-      - name: Install stock running config
+      # ============================================================
+      # 6. Verify toolchains
+      # ============================================================
+      - name: Verify toolchains
         run: |
+          set -e
+
           echo "=========================================="
-          echo "Installing stock kernel configuration"
+          echo "Clang"
+          echo "=========================================="
+          "$CLANG/clang" --version
+
+          echo
+          echo "=========================================="
+          echo "GCC"
+          echo "=========================================="
+          "$GCC64/aarch64-linux-android-gcc" --version
+
+          echo
+          echo "=========================================="
+          echo "Toolchain files"
           echo "=========================================="
 
-          if [ ! -f "config/running.config" ]; then
-            echo "ERROR: config/running.config does not exist!"
+          test -x "$CLANG/clang"
+          test -x "$GCC64/aarch64-linux-android-gcc"
+
+          ls -l "$CLANG/clang"
+          ls -l "$GCC64/aarch64-linux-android-gcc"
+
+      # ============================================================
+      # 7. Prepare stock kernel configuration
+      #
+      # IMPORTANT:
+      # Put your real stock config here:
+      #
+      # config/running.config
+      #
+      # It must be the complete config obtained from:
+      #
+      # adb shell su -c "zcat /proc/config.gz"
+      # ============================================================
+      - name: Prepare kernel configuration
+        run: |
+          set -e
+
+          if [ ! -f config/running.config ]; then
+            echo "ERROR: config/running.config not found!"
+            echo
+            echo "Please put your stock /proc/config.gz output here:"
+            echo "    config/running.config"
             exit 1
           fi
 
-          cp \
-            config/running.config \
-            out/.config
+          mkdir -p out
 
-          echo
-          echo "=========================================="
-          echo "Config information"
-          echo "=========================================="
+          cp config/running.config out/.config
 
-          echo "running.config:"
-          wc -l config/running.config
-
-          echo
-          echo "out/.config:"
-          wc -l out/.config
-
-          echo
-          echo "=========================================="
-          echo "Config SHA256"
-          echo "=========================================="
-
-          sha256sum config/running.config
-
-          sha256sum out/.config
-
-
-      - name: Run olddefconfig
-        run: |
-          echo "=========================================="
-          echo "Running olddefconfig"
-          echo "=========================================="
+          echo "========== Running olddefconfig =========="
 
           make \
             O=out \
             ARCH=arm64 \
             olddefconfig
 
-
-      - name: Generate config diff
-        run: |
-          echo "=========================================="
-          echo "Generating config diff"
-          echo "=========================================="
-
           echo
-          echo "Original running.config:"
+          echo "========== Config generated =========="
+
+          test -f out/.config
+
           wc -l config/running.config
-
-          echo
-          echo "Final out/.config:"
           wc -l out/.config
+
+      # ============================================================
+      # 8. Compare stock config with generated config
+      # ============================================================
+      - name: Compare kernel config
+        run: |
+          set +e
 
           diff -u \
             config/running.config \
             out/.config \
-            > config.diff || true
+            > config.diff
 
-          echo
-          echo "=========================================="
-          echo "CONFIG DIFF"
-          echo "=========================================="
+          DIFF_EXIT=$?
 
-          if [ -s config.diff ]; then
-            echo "Configuration changes detected:"
-            cat config.diff
+          echo "========== config.diff =========="
+
+          if [ "$DIFF_EXIT" -eq 0 ]; then
+            echo "No config differences."
           else
-            echo "No configuration changes detected."
+            cat config.diff
           fi
 
+          exit 0
 
-      - name: Check audio configuration
-        run: |
-          echo "=========================================="
-          echo "AUDIO / SOUND CONFIGURATION"
-          echo "=========================================="
-
-          grep -Ei \
-            'CONFIG_(SND|SOUND|SLIMBUS|WCD|AUDIO|APR|Q6|ADSP|MSM_AUDIO|SPMI|REGMAP)' \
-            out/.config \
-            || true
-
-
+      # ============================================================
+      # 9. Build kernel
+      #
+      # IMPORTANT:
+      #
+      # Do NOT use:
+      #     CC=clang
+      #
+      # Xiaomi's Makefile uses:
+      #     REAL_CC
+      #
+      # Therefore we explicitly provide:
+      #     REAL_CC=.../clang
+      #
+      # CLANG_TRIPLE is also required.
+      # ============================================================
       - name: Build kernel
         run: |
+          set -e
+
           export ARCH=arm64
+          export SUBARCH=arm64
 
-          export CROSS_COMPILE="$GITHUB_WORKSPACE/toolchains/gcc64/bin/aarch64-linux-android-"
+          export CROSS_COMPILE="${GCC64}/aarch64-linux-android-"
+          export CROSS_COMPILE_ARM32=""
 
-          export CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-"
-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-
-          export PATH="$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin:$GITHUB_WORKSPACE/toolchains/gcc64/bin:$GITHUB_WORKSPACE/toolchains/gcc32/bin:$PATH"
+          export CLANG_TRIPLE="aarch64-linux-gnu-"
+          export REAL_CC="${CLANG}/clang"
 
           echo "=========================================="
-          echo "Build environment"
+          echo "Kernel build configuration"
           echo "=========================================="
 
-          echo "ARCH=$ARCH"
-
-          echo "CROSS_COMPILE=$CROSS_COMPILE"
-
-          echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
-
-          echo "CLANG_TRIPLE=$CLANG_TRIPLE"
-
-          echo
-          echo "=========================================="
-          echo "Clang"
-          echo "=========================================="
-
-          clang --version
-
-          echo
-          echo "=========================================="
-          echo "AArch64 GCC"
-          echo "=========================================="
-
-          aarch64-linux-android-gcc --version
-
-          echo
-          echo "=========================================="
-          echo "ARM32 GCC"
-          echo "=========================================="
-
-          arm-linux-androideabi-gcc --version
+          echo "ARCH=${ARCH}"
+          echo "SUBARCH=${SUBARCH}"
+          echo "CROSS_COMPILE=${CROSS_COMPILE}"
+          echo "CLANG_TRIPLE=${CLANG_TRIPLE}"
+          echo "REAL_CC=${REAL_CC}"
 
           echo
           echo "=========================================="
@@ -338,91 +232,141 @@ jobs:
           echo "=========================================="
 
           make \
-            -j"$(nproc)" \
             O=out \
             ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE="$CLANG_TRIPLE" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
+            SUBARCH=arm64 \
+            CROSS_COMPILE="${CROSS_COMPILE}" \
+            REAL_CC="${REAL_CC}" \
+            CLANG_TRIPLE="${CLANG_TRIPLE}" \
+            Image.gz-dtb \
+            -j"$(nproc)"
 
-
-      - name: Check build outputs
+      # ============================================================
+      # 10. Verify generated kernel
+      # ============================================================
+      - name: Verify kernel output
         run: |
+          set -e
+
           echo "=========================================="
-          echo "KERNEL BUILD OUTPUT"
+          echo "Kernel output"
           echo "=========================================="
 
-          ls -lh out/arch/arm64/boot/
-
-          echo
-          echo "=========================================="
-          echo "Image"
-          echo "=========================================="
-
-          if [ -f "out/arch/arm64/boot/Image" ]; then
-            ls -lh out/arch/arm64/boot/Image
-          else
-            echo "WARNING: Image not found"
-          fi
+          find out/arch/arm64/boot \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f  %s bytes\n" \
+            | sort
 
           echo
           echo "=========================================="
-          echo "Image.gz"
+          echo "Required files"
           echo "=========================================="
 
-          if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          test -f out/arch/arm64/boot/Image.gz-dtb
+
+          echo "Image.gz-dtb:"
+          ls -lh out/arch/arm64/boot/Image.gz-dtb
+
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            echo
+            echo "Image.gz:"
             ls -lh out/arch/arm64/boot/Image.gz
-          else
-            echo "WARNING: Image.gz not found"
           fi
 
-          echo
-          echo "=========================================="
-          echo "Image.gz-dtb"
-          echo "=========================================="
-
-          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
-            ls -lh out/arch/arm64/boot/Image.gz-dtb
-          else
-            echo "ERROR: Image.gz-dtb was not generated!"
-            exit 1
+          if [ -f out/arch/arm64/boot/Image ]; then
+            echo
+            echo "Image:"
+            ls -lh out/arch/arm64/boot/Image
           fi
 
+          if [ -f out/System.map ]; then
+            echo
+            echo "System.map:"
+            ls -lh out/System.map
+          fi
 
-      - name: Generate SHA256
+      # ============================================================
+      # 11. Check kernel configuration actually used for build
+      # ============================================================
+      - name: Show important kernel config
         run: |
-          cd out/arch/arm64/boot
+          echo "========== Sound configuration =========="
 
-          echo "=========================================="
-          echo "SHA256"
-          echo "=========================================="
-
-          sha256sum Image \
-            > Image.sha256
-
-          if [ -f "Image.gz" ]; then
-            sha256sum Image.gz \
-              >> Image.sha256
-          fi
-
-          sha256sum Image.gz-dtb \
-            >> Image.sha256
+          grep -E \
+            '^(CONFIG_SND|CONFIG_SND_SOC|CONFIG_SLIBUS|CONFIG_SLIMBUS|CONFIG_MSM_ADSPRPC|CONFIG_MSM_PIL_MSS_QDSP6V5|CONFIG_SPMI|CONFIG_REGMAP_SPMI)' \
+            out/.config \
+            || true
 
           echo
-          cat Image.sha256
+          echo "========== IPA configuration =========="
 
+          grep -E \
+            '^(CONFIG_MSM_SUBSYSTEM_RESTART|CONFIG_IPA|CONFIG_QCOM_IPA)' \
+            out/.config \
+            || true
 
+      # ============================================================
+      # 12. Collect build artifacts
+      #
+      # No boot.img repacking.
+      # No Magisk patching.
+      # Only upload kernel-related files.
+      # ============================================================
+      - name: Prepare artifacts
+        run: |
+          set -e
+
+          mkdir -p artifacts
+
+          # Main kernel used for boot.img replacement
+          cp out/arch/arm64/boot/Image.gz-dtb \
+             artifacts/Image.gz-dtb
+
+          # Other kernel forms, if generated
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz \
+               artifacts/Image.gz
+          fi
+
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image \
+               artifacts/Image
+          fi
+
+          # Kernel config
+          cp out/.config \
+             artifacts/kernel.config
+
+          # Config comparison
+          cp config/running.config \
+             artifacts/running.config
+
+          if [ -f config.diff ]; then
+            cp config.diff \
+               artifacts/config.diff
+          fi
+
+          # Symbol map
+          if [ -f out/System.map ]; then
+            cp out/System.map \
+               artifacts/System.map
+          fi
+
+          echo
+          echo "=========================================="
+          echo "Final artifacts"
+          echo "=========================================="
+
+          ls -lh artifacts/
+
+      # ============================================================
+      # 13. Upload artifacts
+      # ============================================================
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dipper-kernel
+          path: artifacts/
           if-no-files-found: error
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/Image.gz-dtb
-            out/arch/arm64/boot/Image.sha256
-            out/.config
-            config/running.config
-            config.diff
+          retention-days: 30
