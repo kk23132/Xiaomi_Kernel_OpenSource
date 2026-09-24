@@ -10,7 +10,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. Checkout
+      # 1. Checkout kernel source
       # ============================================================
       - name: Checkout kernel source
         uses: actions/checkout@v5
@@ -19,7 +19,7 @@ jobs:
 
 
       # ============================================================
-      # 2. Dependencies
+      # 2. Install build dependencies
       # ============================================================
       - name: Install dependencies
         run: |
@@ -45,9 +45,80 @@ jobs:
             wget \
             xz-utils
 
+          echo "=========================================="
+          echo "Dependencies installed"
+          echo "=========================================="
+
 
       # ============================================================
-      # 3. Download AOSP GCC 4.9
+      # 3. Verify Python 3
+      # ============================================================
+      - name: Verify Python
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Python version"
+          echo "=========================================="
+
+          python3 --version
+          which python3
+
+
+      # ============================================================
+      # 4. Verify gcc-wrapper.py
+      #
+      # IMPORTANT:
+      # gcc-wrapper.py has already been modified in the source tree.
+      # DO NOT rewrite it here.
+      # ============================================================
+      - name: Verify gcc-wrapper.py
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Verifying gcc-wrapper.py"
+          echo "=========================================="
+
+          test -f scripts/gcc-wrapper.py
+
+          echo "gcc-wrapper.py location:"
+          echo "scripts/gcc-wrapper.py"
+
+          echo
+          echo "First lines:"
+          head -n 10 scripts/gcc-wrapper.py
+
+          echo
+          echo "Python syntax check:"
+          python3 -m py_compile scripts/gcc-wrapper.py
+
+          echo "Python syntax check passed."
+
+          echo
+          echo "Checking for Python 2 print syntax..."
+
+          if grep -q 'print >>' scripts/gcc-wrapper.py; then
+            echo "ERROR: Python 2 print syntax detected:"
+            grep -n 'print >>' scripts/gcc-wrapper.py
+            exit 1
+          fi
+
+          echo "No Python 2 print syntax found."
+
+          echo
+          echo "Checking Python interpreter declaration..."
+
+          head -n 1 scripts/gcc-wrapper.py
+
+          echo
+          echo "gcc-wrapper.py verification complete."
+
+
+      # ============================================================
+      # 5. Download AOSP GCC 4.9
+      #
+      # This is the compiler used to build the Android Q kernel.
       # ============================================================
       - name: Download AOSP GCC 4.9
         run: |
@@ -66,36 +137,32 @@ jobs:
           test -x gcc64/bin/aarch64-linux-android-gcc
 
           echo
-          echo "=========================================="
-          echo "GCC version"
-          echo "=========================================="
-
+          echo "AOSP GCC version:"
           gcc64/bin/aarch64-linux-android-gcc --version
 
 
       # ============================================================
-      # 4. Prepare GCC environment
+      # 6. Setup GCC environment
       # ============================================================
       - name: Setup GCC environment
         run: |
           set -e
 
           echo "${GITHUB_WORKSPACE}/gcc64/bin" >> "$GITHUB_PATH"
-
           echo "GCC64=${GITHUB_WORKSPACE}/gcc64/bin" >> "$GITHUB_ENV"
 
           echo "GCC64=${GITHUB_WORKSPACE}/gcc64/bin"
 
 
       # ============================================================
-      # 5. Verify GCC
+      # 7. Verify GCC
       # ============================================================
       - name: Verify GCC
         run: |
           set -e
 
           echo "=========================================="
-          echo "Checking GCC"
+          echo "Verifying AOSP GCC 4.9"
           echo "=========================================="
 
           which aarch64-linux-android-gcc
@@ -105,212 +172,23 @@ jobs:
           test -x "$GCC64/aarch64-linux-android-gcc"
 
           echo
-          echo "GCC path:"
+          echo "Compiler:"
           echo "$GCC64/aarch64-linux-android-gcc"
 
-
-      # ============================================================
-      # 6. Fix gcc-wrapper.py for Python 3
-      #
-      # Original Xiaomi kernel wrapper is Python 2 code.
-      #
-      # GitHub Actions uses Python 3, therefore:
-      #
-      #   - print >> sys.stderr
-      #   - bytes / str handling
-      #
-      # must be fixed.
-      #
-      # This does NOT modify kernel build logic.
-      # ============================================================
-      - name: Fix gcc-wrapper.py Python 3 compatibility
-        run: |
-          set -e
-
-          echo "=========================================="
-          echo "Fixing gcc-wrapper.py"
-          echo "=========================================="
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/gcc-wrapper.py")
-
-          if not path.exists():
-              raise SystemExit("ERROR: scripts/gcc-wrapper.py not found")
-
-          path.write_text(r'''#!/usr/bin/env python3
-          # -*- coding: utf-8 -*-
-
-          # Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
-          #
-          # Redistribution and use in source and binary forms, with or without
-          # modification, are permitted provided that the following conditions are met:
-          #     * Redistributions of source code must retain the above copyright
-          #       notice, this list of conditions and the following disclaimer.
-          #     * Redistributions in binary form must reproduce the above copyright
-          #       notice, this list of conditions and the following disclaimer in the
-          #       documentation and/or other materials provided with the distribution.
-          #     * Neither the name of The Linux Foundation nor
-          #       the names of its contributors may be used to endorse or promote
-          #       products derived from this software without specific prior written
-          #       permission.
-          #
-          # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-          # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-          # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-          # ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-          # LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-          # CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-          # SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-          # INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-          # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-          # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-          # POSSIBILITY OF SUCH DAMAGE.
-
-          import errno
-          import re
-          import os
-          import sys
-          import subprocess
-
-          allowed_warnings = set([
-              "core.c:144",
-              "inet_connection_sock.c:430",
-              "inet_connection_sock.c:467",
-              "inet6_connection_sock.c:89",
-          ])
-
-          ofile = None
-
-          warning_re = re.compile(
-              r'''(.*/|)([^/]+\.[a-z]+:\d+):(\d+:)? warning:'''
-          )
-
-
-          def interpret_warning(line):
-              """Decode the message from gcc."""
-
-              if isinstance(line, bytes):
-                  line = line.decode('utf-8', errors='replace')
-
-              line = line.rstrip('\n')
-
-              m = warning_re.match(line)
-
-              if m and m.group(2) not in allowed_warnings:
-                  print(
-                      "error, forbidden warning:",
-                      m.group(2),
-                      file=sys.stderr
-                  )
-
-                  if ofile:
-                      try:
-                          os.remove(ofile)
-                      except OSError:
-                          pass
-
-                  sys.exit(1)
-
-
-          def run_gcc():
-              args = sys.argv[1:]
-
-              try:
-                  i = args.index('-o')
-
-                  global ofile
-                  ofile = args[i + 1]
-
-              except (ValueError, IndexError):
-                  pass
-
-              try:
-                  proc = subprocess.Popen(
-                      args,
-                      stderr=subprocess.PIPE
-                  )
-
-                  for line in proc.stderr:
-
-                      if isinstance(line, bytes):
-                          line = line.decode(
-                              'utf-8',
-                              errors='replace'
-                          )
-
-                      print(
-                          line,
-                          end='',
-                          file=sys.stderr
-                      )
-
-                      interpret_warning(line)
-
-                  result = proc.wait()
-
-              except OSError as e:
-                  result = e.errno
-
-                  if result == errno.ENOENT:
-                      print(
-                          args[0] + ':',
-                          e.strerror,
-                          file=sys.stderr
-                      )
-
-                      print(
-                          'Is your PATH set correctly?',
-                          file=sys.stderr
-                      )
-
-                  else:
-                      print(
-                          ' '.join(args),
-                          str(e),
-                          file=sys.stderr
-                      )
-
-              return result
-
-
-          if __name__ == '__main__':
-              status = run_gcc()
-              sys.exit(status)
-          ''', encoding="utf-8")
-
-          print("gcc-wrapper.py has been converted to Python 3.")
-
-
-      # ============================================================
-      # 7. Verify gcc-wrapper.py
-      # ============================================================
-      - name: Verify gcc-wrapper.py
-        run: |
-          set -e
-
-          echo "=========================================="
-          echo "Checking gcc-wrapper.py"
-          echo "=========================================="
-
-          head -n 3 scripts/gcc-wrapper.py
-
-          python3 --version
-
-          python3 -m py_compile \
-            scripts/gcc-wrapper.py
-
           echo
-          echo "gcc-wrapper.py syntax check: OK"
+          echo "GCC verification complete."
 
 
       # ============================================================
-      # 8. Prepare stock kernel config
+      # 8. Prepare kernel configuration
       # ============================================================
       - name: Prepare kernel configuration
         run: |
           set -e
+
+          echo "=========================================="
+          echo "Preparing kernel configuration"
+          echo "=========================================="
 
           if [ ! -f config/running.config ]; then
             echo "ERROR: config/running.config does not exist!"
@@ -319,31 +197,38 @@ jobs:
 
           mkdir -p out
 
-          cp \
-            config/running.config \
-            out/.config
+          cp config/running.config out/.config
 
-          echo "=========================================="
-          echo "Running olddefconfig"
-          echo "=========================================="
+          echo
+          echo "Running olddefconfig..."
 
           make \
             O=out \
             ARCH=arm64 \
             olddefconfig
 
-          echo
-          echo "Config generated successfully."
-
           test -f out/.config
+
+          echo
+          echo "Kernel configuration prepared."
+
+          echo
+          echo "Config file:"
+          ls -lh out/.config
 
 
       # ============================================================
-      # 9. Compare configuration
+      # 9. Compare original config and generated config
+      #
+      # This lets us see whether olddefconfig changed anything.
       # ============================================================
       - name: Compare kernel config
         run: |
           set +e
+
+          echo "=========================================="
+          echo "Comparing kernel configuration"
+          echo "=========================================="
 
           diff -u \
             config/running.config \
@@ -352,77 +237,100 @@ jobs:
 
           RESULT=$?
 
-          echo "=========================================="
-          echo "Configuration comparison"
-          echo "=========================================="
-
           if [ "$RESULT" -eq 0 ]; then
             echo "No configuration differences."
           else
+            echo
             echo "Configuration differences:"
+            echo "------------------------------------------"
             cat config.diff
+            echo "------------------------------------------"
           fi
 
+          # Do not fail build because olddefconfig changed config.
           exit 0
 
 
       # ============================================================
-      # 10. Build kernel
+      # 10. Show compiler and build environment
+      # ============================================================
+      - name: Show build environment
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Build environment"
+          echo "=========================================="
+
+          echo "Kernel source:"
+          echo "${GITHUB_WORKSPACE}"
+
+          echo
+          echo "Kernel output:"
+          echo "${GITHUB_WORKSPACE}/out"
+
+          echo
+          echo "ARCH:"
+          echo "arm64"
+
+          echo
+          echo "SUBARCH:"
+          echo "arm64"
+
+          echo
+          echo "CROSS_COMPILE:"
+          echo "${GCC64}/aarch64-linux-android-"
+
+          echo
+          echo "Host compiler:"
+          gcc --version | head -n 1
+
+          echo
+          echo "Target compiler:"
+          "${GCC64}/aarch64-linux-android-gcc" --version | head -n 1
+
+
+      # ============================================================
+      # 11. Build kernel
       #
-      # IMPORTANT:
+      # HOSTCFLAGS=-fcommon:
       #
-      # Target compiler:
-      #   AOSP GCC 4.9
+      # The old kernel DTC source defines yylloc in multiple objects.
+      # Old GCC defaults allowed common symbols, while modern Ubuntu
+      # host GCC uses -fno-common by default.
       #
-      # Host compiler:
-      #   Ubuntu host GCC
-      #
-      # HOSTCFLAGS=-fcommon is required because this old
-      # kernel's DTC source expects the old GCC common-symbol
-      # behavior.
-      #
-      # This does NOT change ARM64 target compiler flags.
+      # This flag affects HOST tools such as DTC only.
+      # It does NOT modify ARM64 kernel compiler flags.
       # ============================================================
       - name: Build kernel
         run: |
           set -e
+
+          echo "=========================================="
+          echo "Starting kernel build"
+          echo "=========================================="
 
           export ARCH=arm64
           export SUBARCH=arm64
 
           export CROSS_COMPILE="${GCC64}/aarch64-linux-android-"
 
-          # Required for old scripts/dtc code when building
-          # with modern Ubuntu host GCC.
+          # Required for old kernel DTC with modern host GCC.
           export HOSTCFLAGS="-fcommon"
 
-          echo "=========================================="
-          echo "Kernel build configuration"
-          echo "=========================================="
-
+          echo
           echo "ARCH=${ARCH}"
           echo "SUBARCH=${SUBARCH}"
           echo "CROSS_COMPILE=${CROSS_COMPILE}"
           echo "HOSTCFLAGS=${HOSTCFLAGS}"
 
           echo
-          echo "=========================================="
-          echo "Target compiler"
-          echo "=========================================="
-
+          echo "Target compiler:"
           "${CROSS_COMPILE}gcc" --version
 
           echo
-          echo "=========================================="
-          echo "Host compiler"
-          echo "=========================================="
-
-          gcc --version
-
+          echo "Building Image.gz-dtb..."
           echo
-          echo "=========================================="
-          echo "Starting kernel build"
-          echo "=========================================="
 
           make \
             O=out \
@@ -433,115 +341,227 @@ jobs:
             Image.gz-dtb \
             -j"$(nproc)"
 
+          echo
+          echo "=========================================="
+          echo "Kernel build completed"
+          echo "=========================================="
+
 
       # ============================================================
-      # 11. Verify output
+      # 12. Verify kernel output
       # ============================================================
       - name: Verify kernel output
         run: |
           set -e
 
           echo "=========================================="
-          echo "Kernel output"
+          echo "Verifying kernel output"
           echo "=========================================="
 
-          find out/arch/arm64/boot \
-            -maxdepth 1 \
-            -type f \
-            -printf "%f  %s bytes\n" \
-            | sort
+          KERNEL="out/arch/arm64/boot/Image.gz-dtb"
+
+          if [ ! -f "$KERNEL" ]; then
+            echo "ERROR: Kernel output not found!"
+            exit 1
+          fi
 
           echo
-          echo "=========================================="
-          echo "Checking Image.gz-dtb"
-          echo "=========================================="
+          echo "Kernel found:"
+          echo "$KERNEL"
 
-          test -f \
-            out/arch/arm64/boot/Image.gz-dtb
+          echo
+          echo "Kernel size:"
+          ls -lh "$KERNEL"
 
-          ls -lh \
-            out/arch/arm64/boot/Image.gz-dtb
+          echo
+          echo "File type:"
+          file "$KERNEL"
+
+          echo
+          echo "Kernel output verification complete."
 
 
       # ============================================================
-      # 12. Show important configuration
+      # 13. Show important sound-related configuration
       # ============================================================
       - name: Show important kernel configuration
         run: |
+          set -e
+
           echo "=========================================="
-          echo "Sound configuration"
+          echo "Sound / Audio configuration"
           echo "=========================================="
 
+          echo
+          echo "----- CONFIG_SND -----"
+
           grep -E \
-            '^(CONFIG_SND|CONFIG_SND_SOC|CONFIG_SLIMBUS|CONFIG_OF_SLIMBUS|CONFIG_MSM_ADSPRPC|CONFIG_MSM_PIL_MSS_QDSP6V5|CONFIG_SPMI|CONFIG_REGMAP_SPMI)' \
+            '^(CONFIG_SND|CONFIG_SND_SOC)' \
             out/.config \
             || true
 
           echo
-          echo "=========================================="
-          echo "Subsystem restart configuration"
-          echo "=========================================="
+          echo "----- SLIMbus -----"
 
           grep -E \
-            '^(CONFIG_MSM_SUBSYSTEM_RESTART|CONFIG_IPA|CONFIG_QCOM_IPA)' \
+            '^(CONFIG_SLIMBUS|CONFIG_OF_SLIMBUS)' \
+            out/.config \
+            || true
+
+          echo
+          echo "----- Qualcomm audio / ADSP -----"
+
+          grep -E \
+            '^(CONFIG_MSM_ADSPRPC|CONFIG_MSM_PIL_MSS_QDSP6V5)' \
+            out/.config \
+            || true
+
+          echo
+          echo "----- SPMI / REGMAP -----"
+
+          grep -E \
+            '^(CONFIG_SPMI|CONFIG_REGMAP_SPMI)' \
+            out/.config \
+            || true
+
+          echo
+          echo "----- Qualcomm audio related -----"
+
+          grep -Ei \
+            '^(CONFIG_.*AUDIO|CONFIG_.*SOUND|CONFIG_.*WCD|CONFIG_.*CODEC)' \
             out/.config \
             || true
 
 
       # ============================================================
-      # 13. Prepare artifacts
+      # 14. Show modem / IPA configuration
+      # ============================================================
+      - name: Show modem and IPA configuration
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Modem / IPA configuration"
+          echo "=========================================="
+
+          echo
+          echo "----- Subsystem restart -----"
+
+          grep -E \
+            '^(CONFIG_MSM_SUBSYSTEM_RESTART|CONFIG_MSM_PIL)' \
+            out/.config \
+            || true
+
+          echo
+          echo "----- IPA -----"
+
+          grep -Ei \
+            '^(CONFIG_.*IPA)' \
+            out/.config \
+            || true
+
+          echo
+          echo "----- QCOM -----"
+
+          grep -Ei \
+            '^(CONFIG_.*QCOM)' \
+            out/.config \
+            || true
+
+
+      # ============================================================
+      # 15. Show kernel build information
+      # ============================================================
+      - name: Show kernel build information
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Kernel build information"
+          echo "=========================================="
+
+          echo
+          echo "Linux version:"
+          grep '^Linux version' out/include/generated/compile.h \
+            2>/dev/null \
+            || true
+
+          echo
+          echo "Kernel release:"
+          make \
+            O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE="${GCC64}/aarch64-linux-android-" \
+            kernelversion \
+            || true
+
+          echo
+          echo "Build information complete."
+
+
+      # ============================================================
+      # 16. Prepare artifacts
       # ============================================================
       - name: Prepare artifacts
         run: |
           set -e
 
+          echo "=========================================="
+          echo "Preparing artifacts"
+          echo "=========================================="
+
           mkdir -p artifacts
 
+          # Main kernel
           cp \
             out/arch/arm64/boot/Image.gz-dtb \
             artifacts/Image.gz-dtb
 
+          # Generated kernel config
           cp \
             out/.config \
             artifacts/kernel.config
 
+          # Original running config
           cp \
             config/running.config \
             artifacts/running.config
 
+          # Config differences
           if [ -f config.diff ]; then
             cp \
               config.diff \
               artifacts/config.diff
           fi
 
+          # System.map
           if [ -f out/System.map ]; then
             cp \
               out/System.map \
               artifacts/System.map
           fi
 
+          # Uncompressed Image
           if [ -f out/arch/arm64/boot/Image ]; then
             cp \
               out/arch/arm64/boot/Image \
               artifacts/Image
           fi
 
+          # Compressed Image
           if [ -f out/arch/arm64/boot/Image.gz ]; then
             cp \
               out/arch/arm64/boot/Image.gz \
               artifacts/Image.gz
           fi
 
-          echo "=========================================="
-          echo "Artifacts"
-          echo "=========================================="
-
+          echo
+          echo "Artifacts:"
           ls -lh artifacts/
 
 
       # ============================================================
-      # 14. Upload artifacts
+      # 17. Upload artifacts
       # ============================================================
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
