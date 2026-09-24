@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+
       - name: Checkout source
         uses: actions/checkout@v5
         with:
@@ -53,8 +54,9 @@ jobs:
           echo "=========================================="
           ls -lh config/running.config
 
-          - name: Download AOSP Clang 9.0.8
-         run: |
+
+      - name: Download AOSP Clang 9.0.8
+        run: |
           cd "$GITHUB_WORKSPACE/toolchains"
 
           echo "=========================================="
@@ -67,51 +69,72 @@ jobs:
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             clang-repo
 
+          echo
           echo "=========================================="
           echo "Checking clang-r365631c"
           echo "=========================================="
 
-          test -d clang-repo/clang-r365631c
+          if [ ! -d "clang-repo/clang-r365631c" ]; then
+            echo "ERROR: clang-r365631c was not found!"
+            echo
+            echo "Available Clang versions:"
+            ls -1 clang-repo | grep '^clang-' || true
+            exit 1
+          fi
 
           mv clang-repo/clang-r365631c clang-r365631c
 
           rm -rf clang-repo
 
+          echo
           echo "=========================================="
           echo "Clang version"
           echo "=========================================="
 
           clang-r365631c/bin/clang --version
 
+
       - name: Download GCC 4.9 AArch64
         run: |
           cd "$GITHUB_WORKSPACE/toolchains"
+
+          echo "=========================================="
+          echo "Downloading AArch64 GCC 4.9"
+          echo "=========================================="
 
           git clone \
             --depth=1 \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 \
             gcc64
 
+          echo
           echo "=========================================="
           echo "AArch64 GCC version"
           echo "=========================================="
 
           gcc64/bin/aarch64-linux-android-gcc --version
 
+
       - name: Download GCC 4.9 ARM32
         run: |
           cd "$GITHUB_WORKSPACE/toolchains"
+
+          echo "=========================================="
+          echo "Downloading ARM32 GCC 4.9"
+          echo "=========================================="
 
           git clone \
             --depth=1 \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 \
             gcc32
 
+          echo
           echo "=========================================="
           echo "ARM32 GCC version"
           echo "=========================================="
 
           gcc32/bin/arm-linux-androideabi-gcc --version
+
 
       - name: Setup toolchain
         run: |
@@ -119,24 +142,42 @@ jobs:
           echo "$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> "$GITHUB_PATH"
 
+
       - name: Install stock running config
         run: |
           echo "=========================================="
           echo "Installing stock kernel configuration"
           echo "=========================================="
 
+          if [ ! -f "config/running.config" ]; then
+            echo "ERROR: config/running.config does not exist!"
+            exit 1
+          fi
+
           cp \
             config/running.config \
             out/.config
 
           echo
-          echo "Config line count:"
+          echo "=========================================="
+          echo "Config information"
+          echo "=========================================="
+
+          echo "running.config:"
+          wc -l config/running.config
+
+          echo
+          echo "out/.config:"
           wc -l out/.config
 
           echo
-          echo "Config SHA256:"
+          echo "=========================================="
+          echo "Config SHA256"
+          echo "=========================================="
+
           sha256sum config/running.config
           sha256sum out/.config
+
 
       - name: Run olddefconfig
         run: |
@@ -148,6 +189,7 @@ jobs:
             O=out \
             ARCH=arm64 \
             olddefconfig
+
 
       - name: Generate config diff
         run: |
@@ -180,6 +222,7 @@ jobs:
             echo "No configuration changes detected."
           fi
 
+
       - name: Check audio configuration
         run: |
           echo "=========================================="
@@ -190,6 +233,7 @@ jobs:
             'CONFIG_(SND|SOUND|SLIMBUS|WCD|AUDIO|APR|Q6|ADSP|MSM_AUDIO|SPMI|REGMAP)' \
             out/.config \
             || true
+
 
       - name: Build kernel
         run: |
@@ -204,10 +248,9 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/toolchains/clang-r365631c/bin:$GITHUB_WORKSPACE/toolchains/gcc64/bin:$GITHUB_WORKSPACE/toolchains/gcc32/bin:$PATH"
 
           echo "=========================================="
-          echo "Building Xiaomi Mi 8 / Dipper kernel"
+          echo "Build environment"
           echo "=========================================="
 
-          echo
           echo "ARCH=$ARCH"
           echo "CROSS_COMPILE=$CROSS_COMPILE"
           echo "CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32"
@@ -227,6 +270,7 @@ jobs:
             CROSS_COMPILE="$CROSS_COMPILE" \
             CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
 
+
       - name: Check build outputs
         run: |
           echo "=========================================="
@@ -240,7 +284,7 @@ jobs:
           echo "Image"
           echo "=========================================="
 
-          if [ -f out/arch/arm64/boot/Image ]; then
+          if [ -f "out/arch/arm64/boot/Image" ]; then
             ls -lh out/arch/arm64/boot/Image
           else
             echo "WARNING: Image not found"
@@ -251,7 +295,7 @@ jobs:
           echo "Image.gz"
           echo "=========================================="
 
-          if [ -f out/arch/arm64/boot/Image.gz ]; then
+          if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             ls -lh out/arch/arm64/boot/Image.gz
           else
             echo "WARNING: Image.gz not found"
@@ -262,12 +306,13 @@ jobs:
           echo "Image.gz-dtb"
           echo "=========================================="
 
-          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
             ls -lh out/arch/arm64/boot/Image.gz-dtb
           else
             echo "ERROR: Image.gz-dtb was not generated!"
             exit 1
           fi
+
 
       - name: Generate SHA256
         run: |
@@ -280,13 +325,17 @@ jobs:
           sha256sum Image \
             > Image.sha256
 
-          sha256sum Image.gz \
-            >> Image.sha256 2>/dev/null || true
+          if [ -f "Image.gz" ]; then
+            sha256sum Image.gz \
+              >> Image.sha256
+          fi
 
           sha256sum Image.gz-dtb \
             >> Image.sha256
 
+          echo
           cat Image.sha256
+
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
