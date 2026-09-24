@@ -23,6 +23,8 @@ jobs:
       # ============================================================
       - name: Install dependencies
         run: |
+          set -e
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -51,6 +53,10 @@ jobs:
         run: |
           set -e
 
+          echo "=========================================="
+          echo "Downloading AOSP GCC 4.9"
+          echo "=========================================="
+
           git clone \
             --depth=1 \
             --branch android10-release \
@@ -59,6 +65,7 @@ jobs:
 
           test -x gcc64/bin/aarch64-linux-android-gcc
 
+          echo
           echo "=========================================="
           echo "GCC version"
           echo "=========================================="
@@ -71,9 +78,13 @@ jobs:
       # ============================================================
       - name: Setup GCC environment
         run: |
+          set -e
+
           echo "${GITHUB_WORKSPACE}/gcc64/bin" >> "$GITHUB_PATH"
 
           echo "GCC64=${GITHUB_WORKSPACE}/gcc64/bin" >> "$GITHUB_ENV"
+
+          echo "GCC64=${GITHUB_WORKSPACE}/gcc64/bin"
 
 
       # ============================================================
@@ -99,7 +110,203 @@ jobs:
 
 
       # ============================================================
-      # 6. Prepare stock kernel config
+      # 6. Fix gcc-wrapper.py for Python 3
+      #
+      # Original Xiaomi kernel wrapper is Python 2 code.
+      #
+      # GitHub Actions uses Python 3, therefore:
+      #
+      #   - print >> sys.stderr
+      #   - bytes / str handling
+      #
+      # must be fixed.
+      #
+      # This does NOT modify kernel build logic.
+      # ============================================================
+      - name: Fix gcc-wrapper.py Python 3 compatibility
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Fixing gcc-wrapper.py"
+          echo "=========================================="
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/gcc-wrapper.py")
+
+          if not path.exists():
+              raise SystemExit("ERROR: scripts/gcc-wrapper.py not found")
+
+          path.write_text(r'''#!/usr/bin/env python3
+          # -*- coding: utf-8 -*-
+
+          # Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+          #
+          # Redistribution and use in source and binary forms, with or without
+          # modification, are permitted provided that the following conditions are met:
+          #     * Redistributions of source code must retain the above copyright
+          #       notice, this list of conditions and the following disclaimer.
+          #     * Redistributions in binary form must reproduce the above copyright
+          #       notice, this list of conditions and the following disclaimer in the
+          #       documentation and/or other materials provided with the distribution.
+          #     * Neither the name of The Linux Foundation nor
+          #       the names of its contributors may be used to endorse or promote
+          #       products derived from this software without specific prior written
+          #       permission.
+          #
+          # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+          # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+          # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+          # ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+          # LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+          # CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+          # SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+          # INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+          # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+          # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+          # POSSIBILITY OF SUCH DAMAGE.
+
+          import errno
+          import re
+          import os
+          import sys
+          import subprocess
+
+          allowed_warnings = set([
+              "core.c:144",
+              "inet_connection_sock.c:430",
+              "inet_connection_sock.c:467",
+              "inet6_connection_sock.c:89",
+          ])
+
+          ofile = None
+
+          warning_re = re.compile(
+              r'''(.*/|)([^/]+\.[a-z]+:\d+):(\d+:)? warning:'''
+          )
+
+
+          def interpret_warning(line):
+              """Decode the message from gcc."""
+
+              if isinstance(line, bytes):
+                  line = line.decode('utf-8', errors='replace')
+
+              line = line.rstrip('\n')
+
+              m = warning_re.match(line)
+
+              if m and m.group(2) not in allowed_warnings:
+                  print(
+                      "error, forbidden warning:",
+                      m.group(2),
+                      file=sys.stderr
+                  )
+
+                  if ofile:
+                      try:
+                          os.remove(ofile)
+                      except OSError:
+                          pass
+
+                  sys.exit(1)
+
+
+          def run_gcc():
+              args = sys.argv[1:]
+
+              try:
+                  i = args.index('-o')
+
+                  global ofile
+                  ofile = args[i + 1]
+
+              except (ValueError, IndexError):
+                  pass
+
+              try:
+                  proc = subprocess.Popen(
+                      args,
+                      stderr=subprocess.PIPE
+                  )
+
+                  for line in proc.stderr:
+
+                      if isinstance(line, bytes):
+                          line = line.decode(
+                              'utf-8',
+                              errors='replace'
+                          )
+
+                      print(
+                          line,
+                          end='',
+                          file=sys.stderr
+                      )
+
+                      interpret_warning(line)
+
+                  result = proc.wait()
+
+              except OSError as e:
+                  result = e.errno
+
+                  if result == errno.ENOENT:
+                      print(
+                          args[0] + ':',
+                          e.strerror,
+                          file=sys.stderr
+                      )
+
+                      print(
+                          'Is your PATH set correctly?',
+                          file=sys.stderr
+                      )
+
+                  else:
+                      print(
+                          ' '.join(args),
+                          str(e),
+                          file=sys.stderr
+                      )
+
+              return result
+
+
+          if __name__ == '__main__':
+              status = run_gcc()
+              sys.exit(status)
+          ''', encoding="utf-8")
+
+          print("gcc-wrapper.py has been converted to Python 3.")
+
+
+      # ============================================================
+      # 7. Verify gcc-wrapper.py
+      # ============================================================
+      - name: Verify gcc-wrapper.py
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Checking gcc-wrapper.py"
+          echo "=========================================="
+
+          head -n 3 scripts/gcc-wrapper.py
+
+          python3 --version
+
+          python3 -m py_compile \
+            scripts/gcc-wrapper.py
+
+          echo
+          echo "gcc-wrapper.py syntax check: OK"
+
+
+      # ============================================================
+      # 8. Prepare stock kernel config
       # ============================================================
       - name: Prepare kernel configuration
         run: |
@@ -112,7 +319,9 @@ jobs:
 
           mkdir -p out
 
-          cp config/running.config out/.config
+          cp \
+            config/running.config \
+            out/.config
 
           echo "=========================================="
           echo "Running olddefconfig"
@@ -130,7 +339,7 @@ jobs:
 
 
       # ============================================================
-      # 7. Compare configuration
+      # 9. Compare configuration
       # ============================================================
       - name: Compare kernel config
         run: |
@@ -158,14 +367,21 @@ jobs:
 
 
       # ============================================================
-      # 8. Build kernel with GCC 4.9
+      # 10. Build kernel
       #
       # IMPORTANT:
       #
-      # Do NOT use CC=clang.
-      # Do NOT use REAL_CC.
+      # Target compiler:
+      #   AOSP GCC 4.9
       #
-      # This is a pure GCC build.
+      # Host compiler:
+      #   Ubuntu host GCC
+      #
+      # HOSTCFLAGS=-fcommon is required because this old
+      # kernel's DTC source expects the old GCC common-symbol
+      # behavior.
+      #
+      # This does NOT change ARM64 target compiler flags.
       # ============================================================
       - name: Build kernel
         run: |
@@ -176,6 +392,10 @@ jobs:
 
           export CROSS_COMPILE="${GCC64}/aarch64-linux-android-"
 
+          # Required for old scripts/dtc code when building
+          # with modern Ubuntu host GCC.
+          export HOSTCFLAGS="-fcommon"
+
           echo "=========================================="
           echo "Kernel build configuration"
           echo "=========================================="
@@ -183,13 +403,21 @@ jobs:
           echo "ARCH=${ARCH}"
           echo "SUBARCH=${SUBARCH}"
           echo "CROSS_COMPILE=${CROSS_COMPILE}"
+          echo "HOSTCFLAGS=${HOSTCFLAGS}"
 
           echo
           echo "=========================================="
-          echo "Compiler"
+          echo "Target compiler"
           echo "=========================================="
 
           "${CROSS_COMPILE}gcc" --version
+
+          echo
+          echo "=========================================="
+          echo "Host compiler"
+          echo "=========================================="
+
+          gcc --version
 
           echo
           echo "=========================================="
@@ -201,12 +429,13 @@ jobs:
             ARCH=arm64 \
             SUBARCH=arm64 \
             CROSS_COMPILE="${CROSS_COMPILE}" \
+            HOSTCFLAGS="${HOSTCFLAGS}" \
             Image.gz-dtb \
             -j"$(nproc)"
 
 
       # ============================================================
-      # 9. Verify output
+      # 11. Verify output
       # ============================================================
       - name: Verify kernel output
         run: |
@@ -227,13 +456,15 @@ jobs:
           echo "Checking Image.gz-dtb"
           echo "=========================================="
 
-          test -f out/arch/arm64/boot/Image.gz-dtb
+          test -f \
+            out/arch/arm64/boot/Image.gz-dtb
 
-          ls -lh out/arch/arm64/boot/Image.gz-dtb
+          ls -lh \
+            out/arch/arm64/boot/Image.gz-dtb
 
 
       # ============================================================
-      # 10. Show important configuration
+      # 12. Show important configuration
       # ============================================================
       - name: Show important kernel configuration
         run: |
@@ -258,7 +489,7 @@ jobs:
 
 
       # ============================================================
-      # 11. Prepare artifacts
+      # 13. Prepare artifacts
       # ============================================================
       - name: Prepare artifacts
         run: |
@@ -279,11 +510,15 @@ jobs:
             artifacts/running.config
 
           if [ -f config.diff ]; then
-            cp config.diff artifacts/config.diff
+            cp \
+              config.diff \
+              artifacts/config.diff
           fi
 
           if [ -f out/System.map ]; then
-            cp out/System.map artifacts/System.map
+            cp \
+              out/System.map \
+              artifacts/System.map
           fi
 
           if [ -f out/arch/arm64/boot/Image ]; then
@@ -306,7 +541,7 @@ jobs:
 
 
       # ============================================================
-      # 12. Upload artifacts
+      # 14. Upload artifacts
       # ============================================================
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
