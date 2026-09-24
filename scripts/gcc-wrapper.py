@@ -1,4 +1,4 @@
-#! /usr/bin/env python2
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
@@ -17,15 +17,15 @@
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-# NON-INFRINGEMENT ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
-# OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-# ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 
 # Invoke gcc, looking for warnings, and causing a failure if there are
 # non-whitelisted warnings.
@@ -44,18 +44,35 @@ allowed_warnings = set([
     "inet_connection_sock.c:430",
     "inet_connection_sock.c:467",
     "inet6_connection_sock.c:89",
- ])
+])
 
 # Capture the name of the object file, can find it.
 ofile = None
 
-warning_re = re.compile(r'''(.*/|)([^/]+\.[a-z]+:\d+):(\d+:)? warning:''')
+warning_re = re.compile(
+    r'''(.*/|)([^/]+\.[a-z]+:\d+):(\d+:)? warning:'''
+)
+
+
 def interpret_warning(line):
-    """Decode the message from gcc.  The messages we care about have a filename, and a warning"""
+    """Decode the message from gcc.
+
+    The messages we care about have a filename and a warning.
+    """
+
+    # Python 3: subprocess.PIPE returns bytes.
+    if isinstance(line, bytes):
+        line = line.decode('utf-8', errors='replace')
+
     line = line.rstrip('\n')
+
     m = warning_re.match(line)
     if m and m.group(2) not in allowed_warnings:
-        print >> sys.stderr, "error, forbidden warning:", m.group(2)
+        print(
+            "error, forbidden warning:",
+            m.group(2),
+            file=sys.stderr
+        )
 
         # If there is a warning, remove any object if it exists.
         if ofile:
@@ -63,36 +80,60 @@ def interpret_warning(line):
                 os.remove(ofile)
             except OSError:
                 pass
+
         sys.exit(1)
+
 
 def run_gcc():
     args = sys.argv[1:]
+
     # Look for -o
     try:
         i = args.index('-o')
         global ofile
-        ofile = args[i+1]
+        ofile = args[i + 1]
     except (ValueError, IndexError):
         pass
 
-    compiler = sys.argv[0]
-
     try:
-        proc = subprocess.Popen(args, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(
+            args,
+            stderr=subprocess.PIPE
+        )
+
         for line in proc.stderr:
+            # Python 3: convert bytes to str before printing
+            # and before warning processing.
+            if isinstance(line, bytes):
+                line = line.decode('utf-8', errors='replace')
+
             print(line, end='', file=sys.stderr)
             interpret_warning(line)
 
         result = proc.wait()
+
     except OSError as e:
         result = e.errno
+
         if result == errno.ENOENT:
-            print >> sys.stderr, args[0] + ':',e.strerror
-            print >> sys.stderr, 'Is your PATH set correctly?'
+            print(
+                args[0] + ':',
+                e.strerror,
+                file=sys.stderr
+            )
+            print(
+                'Is your PATH set correctly?',
+                file=sys.stderr
+            )
         else:
-            print >> sys.stderr, ' '.join(args), str(e)
+            print(
+                ' '.join(args),
+                str(e),
+                file=sys.stderr
+            )
 
     return result
+
 
 if __name__ == '__main__':
     status = run_gcc()
