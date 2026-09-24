@@ -53,18 +53,29 @@ jobs:
           echo "=========================================="
           ls -lh config/running.config
 
-      - name: Download AOSP Clang 9.0.8
-        run: |
+          - name: Download AOSP Clang 9.0.8
+         run: |
           cd "$GITHUB_WORKSPACE/toolchains"
 
-          wget -q \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android10-release/clang-r365631c.tar.gz" \
-            -O clang-r365631c.tar.gz
+          echo "=========================================="
+          echo "Downloading AOSP Clang r365631c"
+          echo "=========================================="
 
-          mkdir -p clang-r365631c
+          git clone \
+            --depth=1 \
+            --branch android11-release \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            clang-repo
 
-          tar -xzf clang-r365631c.tar.gz \
-            -C clang-r365631c
+          echo "=========================================="
+          echo "Checking clang-r365631c"
+          echo "=========================================="
+
+          test -d clang-repo/clang-r365631c
+
+          mv clang-repo/clang-r365631c clang-r365631c
+
+          rm -rf clang-repo
 
           echo "=========================================="
           echo "Clang version"
